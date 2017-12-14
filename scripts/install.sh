@@ -51,12 +51,15 @@ popd
 
 # Setup the basic OSA configuration structure.
 if [[ ! -d "/etc/openstack_deploy" ]]; then
-  cp -Rv /opt/openstack-ansible/etc/openstack_deploy /etc/openstack_deploy
+  rsync -av \
+        --include='*.yml' --include='*/' --exclude='*' \
+        /opt/openstack-ansible/etc/openstack_deploy/ \
+        /etc/openstack_deploy/
 fi
 
 # Sync the RPC-OpenStack variables into place.
 rsync -av \
-      --exclude '*.bak' \
+      --include='*.yml' --include='*/' --exclude='*' \
       "${SCRIPT_PATH}/../etc/openstack_deploy/" \
       /etc/openstack_deploy/
 
