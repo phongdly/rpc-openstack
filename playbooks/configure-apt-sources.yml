@@ -96,6 +96,10 @@
         - apt_artifact_found | bool
         - apt_artifact_enabled | bool
 
+    - name: Override artifacts mode if RPCO_APT_ARTIFACTS_MODE is set
+      set_fact:
+        rpco_apt_artifacts_mode: "{{ lookup('env', 'RPCO_APT_ARTIFACTS_MODE') | default('strict', True) }}"
+
     - name: Determine the existing Ubuntu repo configuration
       shell: 'sed "s/^[ \t]*//" /etc/apt/sources.list | grep -oP "^deb \K(\[?.*\]?.*ubuntu\S*\/?)(?= {{ ansible_distribution_release }} main)"'
       register: _ubuntu_repo
@@ -115,7 +119,14 @@
         - apt_artifact_found | bool
         - apt_artifact_enabled | bool
 
-    - name: Replace the apt sources file with our content
+    - name: Backup the original sources file
+      copy:
+        src: /etc/apt/sources.list
+        dest: /etc/apt/sources.list.original
+        remote_src: yes
+        force: no
+
+    - name: Replace the apt sources file with our content (artifact 'strict' mode)
       copy:
         content: |
           # Base repository
@@ -126,6 +137,21 @@
       when:
         - apt_artifact_found | bool
         - apt_artifact_enabled | bool
+        - rpco_apt_artifacts_mode == "strict"
+
+    - name: Restore the original sources file (artifact 'loose' mode)
+      copy:
+        src: /etc/apt/sources.list.original
+        dest: /etc/apt/sources.list
+        remote_src: >-
+          # Set rpco_apt_sources_restore_source to 'local' to have the
+          # original apt sources file from the deploy host be pushed out
+          # to all hosts and containers.
+          {{ (rpco_apt_sources_restore_source | default('remote') == 'remote') | ternary('yes', 'no') }}
+        force: yes
+      register: apt_sources_restore
+      when:
+        - rpco_apt_artifacts_mode != "strict"
 
     - name: Create the rpco apt sources file
       copy:
@@ -151,16 +177,12 @@
         - apt_artifact_found | bool
         - apt_artifact_enabled | bool
 
-    - name: Remove extra sources
-      lineinfile:
-        dest: /etc/apt/sources.list
-        state: absent
-        regexp: "{{ item }}"
-      with_items:
-        - "^deb-src"
-        - "-backports"
-        - "-security"
-        - "-updates"
+    - name: Set the preferred repo to use to be the apt artifact repo
+      copy:
+        content: >-
+          APT::Default-Release "{{ rpc_release }}-{{ ansible_distribution_release }}";
+        dest: /etc/apt/apt.conf.d/99rpco-pin
+      register: apt_sources_pin
       when:
         - apt_artifact_found | bool
         - apt_artifact_enabled | bool
@@ -169,8 +191,9 @@
       apt:
         update_cache: yes
       when:
-        - (apt_artifact_found | bool) and (apt_sources_configure | changed or apt_sources_configure_rpco | changed)
         - apt_artifact_enabled | bool
+        - apt_artifact_found | bool
+        - apt_sources_configure | changed or apt_sources_configure_rpco | changed or apt_sources_restore | changed or apt_sources_pin | changed
 
   post_tasks:
     - name: Set artifact local fact
